@@ -1,0 +1,125 @@
+const { test, expect, devices, chromium } = require('@playwright/test');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+test.use({
+  browserName: 'chromium',
+  ...devices['iPhone 13'], 
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+});
+
+test('Kompletny test na iPhone 13 z przejściem do Report', async ({ page, context }) => {
+  test.setTimeout(600000);
+
+  // 🔹 Ustawienie Basic Auth
+  await context.setHTTPCredentials({
+    username: 'abc',
+    password: '12345'
+  });
+
+  // 🔹 Ustawienie przeglądarki w trybie widocznym (headless: false)
+  const browser = await chromium.launch({ headless: false });
+  const newContext = await browser.newContext({
+    ...devices['iPhone 13'],
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
+    isMobile: true,
+  });
+  const newPage = await newContext.newPage();
+
+  let requestTimings = [];
+
+  newPage.on('request', (request) => {
+    requestTimings.push({ 
+      url: request.url(), 
+      method: request.method(),
+      startTime: Date.now(),
+    });
+  });
+
+  newPage.on('response', async (response) => {
+    const url = response.url();
+    const status = response.status();
+    const timing = requestTimings.find(req => req.url === url);
+    if (timing) {
+      timing.endTime = Date.now();
+      timing.duration = timing.endTime - timing.startTime;
+      timing.status = status;
+      try {
+        timing.size = (await response.body()).length;
+      } catch {
+        timing.size = 0;
+      }
+    }
+  });
+
+  console.log('Przechodzimy na stronę z Basic Auth...');
+  await newPage.goto('https://example.com/', { waitUntil: 'load' });
+
+  console.log('Czekamy na przekierowanie na `/landing`...');
+  await newPage.waitForURL('**/landing', { timeout: 60000 });
+
+  console.log('Klikamy "Sound On"...');
+  const soundOnButton = newPage.locator('css=body > div:nth-child(6) > main > section > div.Modal_Modal__aXiEt > div > div.Modal_ButtonContainer__OqWCN > button:nth-child(2)');
+  await soundOnButton.waitFor({ state: 'visible', timeout: 30000 });
+  await soundOnButton.click({ force: true });
+
+  console.log('Czekamy na pojawienie się search bara...');
+  const searchBar = newPage.locator('css=#fouc-wrapper > section > div > div > div > form > input');
+  await searchBar.waitFor({ state: 'visible', timeout: 30000 });
+
+  console.log('Wpisujemy "8 ha" w wyszukiwarce...');
+  await searchBar.fill('8 ha');
+  await newPage.waitForTimeout(1000);
+
+  console.log('Klikamy pierwszą podpowiedź...');
+  const firstSuggestion = newPage.locator('css=#fouc-wrapper > section > div > div > div > ul > li:nth-child(1) > span > span:nth-child(2)');
+  await firstSuggestion.waitFor({ state: 'visible', timeout: 10000 });
+  await firstSuggestion.click();
+
+  console.log('Klikamy w przycisk strzałki, żeby przejść dalej...');
+  const arrowButton = newPage.locator('css=#fouc-wrapper > section > div > div > div > form > button');
+  await arrowButton.waitFor({ state: 'visible', timeout: 5000 });
+  await arrowButton.click();
+
+  console.log('Czekamy na przekierowanie na `/experience`...');
+  await newPage.waitForURL('**/experience', { timeout: 120000 });
+
+  console.log('Czekamy na zmianę URL na `/thank-you`...');
+  await newPage.waitForURL('**/thank-you', { timeout: 300000 });
+
+  console.log('Czekamy na przycisk "Raport"...');
+  const reportButton = newPage.locator('css=#fouc-wrapper > section > div > div > div.ThankYouPage_ButtonContainer__iYKf6 > span:nth-child(1) > a');
+  await reportButton.waitFor({ state: 'visible', timeout: 30000 });
+
+  console.log('Klikamy przycisk "Raport"...');
+  await reportButton.click();
+
+  console.log('Czekamy na pełne załadowanie strony `/report`...');
+  await newPage.waitForURL('**/report', { timeout: 60000 });
+
+  console.log('Oczekiwanie 10 sekund na stronie `/report`...');
+  await newPage.waitForTimeout(10000);  // ✅ 10 sekund oczekiwania
+
+  console.log('Zapisujemy zrzut ekranu strony `/report`...');
+  await newPage.screenshot({ path: 'report_page.png', fullPage: true });
+
+  console.log('✅ Test zakończony sukcesem!');
+
+  const logFilePath = path.join(os.homedir(), 'Desktop', 'network_log_iphone13_report.json');
+  
+  if (requestTimings.length === 0) {
+    console.warn('Brak zarejestrowanych żądań sieciowych!');
+  }
+
+  fs.writeFileSync(logFilePath, JSON.stringify(requestTimings, null, 2));
+
+  console.log(`Logi zapisane w pliku: ${logFilePath}`);
+  console.log('Pierwsze 5 żądań:');
+  console.table(requestTimings.slice(0, 5));
+
+  await browser.close();
+});
